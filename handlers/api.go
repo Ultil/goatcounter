@@ -5,9 +5,11 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/csv"
 	"fmt"
 	"net/http"
 	"os"
@@ -89,6 +91,7 @@ func (h api) mount(r chi.Router, db zdb.DB) {
 	a.Get("/api/v0/paths", zhttp.Wrap(h.paths))
 	a.Get("/api/v0/stats/total", zhttp.Wrap(h.countTotal))
 	a.Get("/api/v0/stats/hits", zhttp.Wrap(h.hits))
+	a.Get("/api/v0/stats/save_hits", zhttp.Wrap(h.saveHits))
 	a.Get("/api/v0/stats/hits/{path_id}", zhttp.Wrap(h.refs))
 	a.Get("/api/v0/stats/{page}", zhttp.Wrap(h.stats))
 	a.Get("/api/v0/stats/{page}/{id}", zhttp.Wrap(h.statsDetail))
@@ -895,6 +898,113 @@ func (h api) hits(w http.ResponseWriter, r *http.Request) error {
 		Hits:  pages,
 		More:  more,
 	})
+}
+
+type Entry struct {
+	Path  string `json:"Path"`
+	Count int    `json:"Count"`
+}
+
+func convertToCSV(data []Entry) (string, error) {
+	var csvData bytes.Buffer
+
+	writer := csv.NewWriter(&csvData)
+
+	// Write CSV header
+	header := []string{"Path", "Count"}
+	err := writer.Write(header)
+	if err != nil {
+		return "", err
+	}
+
+	// Write CSV data
+	for _, person := range data {
+		row := []string{person.Path, fmt.Sprintf("%d", person.Count)}
+		err := writer.Write(row)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	writer.Flush()
+
+	return csvData.String(), nil
+}
+
+type (
+	apiAllHitsRequest struct {
+		// Start time, should be rounded to the hour {datetime, default: one week ago}.
+		Start time.Time `json:"start" query:"start"`
+
+		// End time, should be rounded to the hour {datetime, default: current time}.
+		End time.Time `json:"end" query:"end"`
+
+		// Group by day, rather than by hour. This only affects the Hits.Max
+		// value: if enabled it's set to the highest value for that day, rather
+		// than the highest value for the hour.
+		Daily bool `json:"daily" query:"daily"`
+
+		// Include only these paths; default is to include everything.
+		IncludePaths goatcounter.Ints `json:"include_paths" query:"include_paths"`
+
+		// Exclude these paths, for pagination.
+		ExcludePaths goatcounter.Ints `json:"exclude_paths" query:"exclude_paths"`
+	}
+)
+
+// GET /api/v0/stats/hits/save stats
+// Save pageview.
+//
+// Query: apiAllHitsRequest
+// Response 200: goatcounter.HitLists
+func (h api) saveHits(w http.ResponseWriter, r *http.Request) error {
+	args := apiAllHitsRequest{}
+	if _, err := zhttp.Decode(r, &args); err != nil {
+		return err
+	}
+	if args.Start.IsZero() {
+		args.Start = ztime.AddPeriod(ztime.Now(), -7, ztime.Day)
+	}
+	if args.End.IsZero() {
+		args.End = ztime.Now()
+	}
+
+	var allPages goatcounter.HitLists
+	more := true
+
+	for more {
+		var pages goatcounter.HitLists
+		_, moreFromList, err := pages.List(r.Context(), ztime.NewRange(args.Start).To(args.End),
+			args.IncludePaths, args.ExcludePaths, 9999, args.Daily)
+		if err != nil {
+			return err
+		}
+
+		allPages = append(allPages, pages...)
+		more = moreFromList
+	}
+
+	var jsonData []Entry
+	for _, page := range allPages {
+		jsonData = append(jsonData, Entry{
+			Path:  page.Path,
+			Count: page.Count,
+		})
+	}
+
+	csvData, err := convertToCSV(jsonData)
+	if err != nil {
+		w.WriteHeader(400)
+		return zhttp.JSON(w, apiError{Error: "Error converting to CSV"})
+	}
+
+	// Set headers for downloading the CSV file
+	w.Header().Set("Content-Type", "text/csv")
+	w.Header().Set("Content-Disposition", "attachment; filename=hits_data.csv")
+
+	// Write the CSV data to the response writer
+	w.Write([]byte(csvData))
+	return nil
 }
 
 type (

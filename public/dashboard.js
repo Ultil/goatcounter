@@ -638,6 +638,10 @@
 
 	// Paginate the main path overview.
 	var paginate_pages = function() {
+		$('.pages-list > .download').on('click', function (e) {
+			e.preventDefault()
+			window.open(`/api/v0/stats/save_hits?start=${$('#period-start').val()}&end=${$('#period-end').val()}`, "_blank")
+		})
 		$('.pages-list >.load-more').on('click', function(e) {
 			e.preventDefault()
 

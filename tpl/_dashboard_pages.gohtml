@@ -13,6 +13,8 @@
 		<a href="#" class="logged-in configure-widget" aria-label="{{t $.Context "button/cfg-dashboard|Configure"}}">⚙&#xfe0f;</a>
 	</div>
 
+	<a href="#" class="download" style="color: var(--link);padding-bottom: 1rem;font-size: 16px;font-weight: 400;text-align: right;display: block;">Download</a>
+
 	{{if .Err}}
 		<em>{{t .Context "p/error|Error: %(error-message)" .Err}}</em>
 	{{else}}
